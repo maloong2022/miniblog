@@ -1,0 +1,9 @@
+*.bak
+*~
+
+go.work
+go.work.sum
+
+*.log
+
+/_output
