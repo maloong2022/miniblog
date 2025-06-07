@@ -7,6 +7,7 @@ require (
 	github.com/gin-contrib/pprof v1.5.3
 	github.com/gin-gonic/gin v1.10.1
 	github.com/go-kratos/kratos/v2 v2.8.4
+	github.com/google/uuid v1.6.0
 	github.com/gosuri/uitable v0.0.4
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.26.3
 	github.com/spf13/cobra v1.9.1

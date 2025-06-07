@@ -1876,3 +1876,264 @@ make build
 _output/mb-apiserver
 ```
 在启动服务后，键入 CTRL+C，可以看到服务优雅退出日志。
+
+### Web中间件的实现
+中间件（Middleware）是位于应用程序请求-响应处理循环中的一个特殊函数。它可以在请求到达业务逻辑处
+理之前修改/处理请求，或是在响应返回给客户端之前修改/处理响应。中间件根据使用方又可分为客户端中间
+件和服务端中间件，两者在实现原理和使用方式上是一致的。
+
+中间件的核心作用是对请求或响应进行预处理、后处理或监控。它允许在请求和响应被发送或接收之前或之后
+插入自定义逻辑，从而实现多种功能，例如认证、授权、日志记录、性能监控、错误处理、请求验证、跨域支持、
+限流等。以下是核心使用场景的详细说明：
+
+1. 认证和授权：使用中间件可以实现认证和授权逻辑。在中间件中，可以验证请求者的身份、权限等信息，并根据情况决定是否允许请求继续进行；
+2. 日志记录：中间件可以用于记录请求和响应的详细信息，从而实现日志记录和监控。可以记录请求的内容、调用的方法、响应的结果等，以便于调试和分析；
+3. 错误处理：在中间件中可以捕获和处理 gRPC 调用过程中可能发生的错误，以提供更友好的错误信息或进行恢复操作；
+4. 性能监视：使用中间件可以监视 Web 调用的性能指标，如调用时间、响应时间等，从而实现性能监控和优化。
+
+使用 Web 中间件能够带来诸多优点，主要包括以下几点：
+1. 提升代码复用性：中间件可以在多个路由、甚至不同项目中被重复使用。通过提取通用功能为中间件，不但减少了重复代码，还降低了开发和维护成本；
+2. 提高代码的模块化：中间件允许开发者将应用程序的通用功能抽象为独立的模块。每个模块在一个独立的处理中间层中实现，可以专注于特定功能，而无需杂糅到主业务逻辑中。另外，代码模块化，也可以增强代码可维护性，修改某个功能时，只需调整相关的中间件，而不会影响主代码逻辑；
+3. 方便处理全局功能：中间件可以拦截和处理所有请求，非常适合用来实现一些通用的功能。例如错误处理、数据验证、CORS 支持等，都可以在中间件层处理，而不需要在每个业务逻辑中重复实现；
+4. 支持中间件链式调用，便于扩展功能：中间件通过链式调用机制，可以轻松扩展新功能，而无需改动现有代码。例如，在一条请求处理中，可以先进行身份验证，然后验证权限，最后记录日志。通过中间件链的组合，扩展新的功能就像添加新的链环一样简单。
+
+目前主流 Web 框架均支持中间件功能。尽管在不同框架中可能有不同的称谓，例如 Filter（过滤器）、Middleware（中间件）、Interceptor（拦截器）等，但其核心机制相似。
+
+Web 中间件工作原理如图
+![](docs/images/9.png)
+
+有两个中间件：中间件 A 和中间件 B。一个 Web 请求从开始到结束时的执行流程为：中间件 A->中间件 B->处理器函数->中间件 B->中间件 A，其执行顺序类似于栈结构。
+
+Web 中间件的作用实际上是实现对请求的前置拦截和对响应的后置拦截功能：
+
+1. 请求前置拦截：在 Web 请求到达定义的处理器函数之前，对请求进行拦截并执行相应的处理；
+2. 请求后置拦截：在完成请求的处理并响应客户端后，拦截响应并进行相应的处理。
+需要注意的是，中间件会附加到每个请求的链路上，因此如果中间件性能较差或不稳定，将会影响所有 API 接口。因此，在开发中间件时，应确保其稳定性和性能，同时建议仅添加必要的中间件。
+
+### gRPC 添加拦截器
+
+gRPC 框架也支持 Web 中间件，在 gRPC 框架中，Web 中间件叫拦截器
+
+#### gRPC 拦截器介绍
+gRPC 拦截器是一个 Web 中间件。利用拦截器，开发者可以在不侵入业务逻辑的前提下修改或者记录服务端或客户端的请求与响应，利用拦截器可以实现诸如日志记录、权限认证、限流等诸多功能。
+gRPC 的通信模式分为 Unary 和 Streaming 两种模式，拦截器也分为两种：UnaryInterceptor（一元拦截器）和 StreamInterceptor（流式拦截器）。这两种拦截器可以分别应用在服务端和客户端，所以 gRPC 框架中，一共提供了四种拦截器：
+
+1. UnaryServerInterceptor：服务端一元拦截器，适用于简单 RPC 调用。它会在服务端接收到请求时执行拦截逻辑，通常用于对请求进行预处理、授权、认证、日志记录、错误处理等；
+2. StreamServerInterceptor：服务端流式拦截器，适用于流式 RPC 调用，例如客户端流式、服务端流式和双向流式 RPC 调用。它会在服务端接收到流式请求时进行拦截，允许开发者对流式数据进行操作和处理；
+3. UnaryClientInterceptor：客户端一元拦截器，适用于简单 RPC 调用（Unary RPC）。它会拦截客户端发起的调用，通常用于操控请求或响应，比如：请求重试、请求参数的统一注入、加密、客户端的日志记录等；
+4. StreamClientInterceptor：客户端流式拦截器，适用于流式 RPC 调用（客户端流式、服务端流式、双向流式）。它允许在流式调用时通过拦截客户端流（ClientStream）创建过程自定义逻辑，开发者可以围绕流式数据进行操作。
+
+
+    提示：
+    Unary 一般被翻译为一元或者单一。Unary RPC 一般翻译为“简单 RPC”或“单请求单响应 RPC”。
+
+miniblog 项目使用的 gRPC 拦截器类型：UnaryServerInterceptor 和 UnaryClientInterceptor。
+
+#### 实现请求 ID 拦截器
+
+在实际应用开发中，常会遇到如下场景：某用户执行某次操作失败，并向开发人员寻求问题定位和修复。这时，用户通常会提供一些基本的请求信息，供开发人员进行问题排查。
+
+在定位问题时，大多数情况下需要通过查找日志来发现问题。然而，用户提供的信息可能不足以精确定位问题，或者查找到的日志并非与用户请求对应的日志记录。在这种情况下，该如何处理？
+
+目前最优的解决方案是：为每次请求注入一个唯一的 RequestID（或者 TraceID），并在每条日志中输出该 RequestID。这样，用户只需提供一个唯一的 RequestID，开发人员即可快速定位与该请求相关的所有日志记录，从而提高问题修复的效率和准确性。为应用添加 RequestID 具体需要实现以下功能：
+
+1. 在请求中注入 RequestID；
+2. 在日志中打印 RequestID。
+
+因为每个请求都需要添加 RequestID，所以很自然的，考虑使用 gRPC 拦截器来实现。因为 miniblog 实现了简单模式的 gRPC 服务，并且 RequestID 是在服务端收到请求时添加，所以需要实现 UnaryServerInterceptor 类型的拦截器。
+新建 internal/pkg/middleware/grpc/requestid.go 文件，在该文件中实现一个 RequestIDInterceptor 拦截器，用来给每个请求生成 RequestID。考虑到代码的可维护性和可复用性，将拦截器统一保存在 internal/pkg/middleware 目录中。miniblog 同时使用了 Gin 框架和 gRPC 框架，两种框架的中间实现方法不同，所以需要将 gRPC 拦截器和 Gin 中间件分别保存在 grpc 目录和 gin 目录中。
+
+代码实现了一个针对服务端一元调用（Unary RPC）的服务端一元拦截器 RequestIDInterceptor。
+
+RequestIDInterceptor() 方法会返回一个 grpc.UnaryServerInterceptor 类型的函数。该函数，会先尝试从 gRPC 请求的元数据中获取键为 x-request-id 的请求 ID，如果没有获取到就调用 uuid.New().String() 方法生成一个请求 ID，并将生成的请求 ID 保存在 gRPC 请求和返回的元数据中。
+
+    提示：
+
+    在 gRPC 通信中，元数据（metadata）是一种轻量级、灵活的机制，用于通过上下文传递额外的信息（如认证信息、追踪 ID 等），类似于 HTTP 中的 Header。Metadata 本质上是一组键值对，可以在 RPC 调用的请求和响应双方进行交换。这些键值对通常被用作元信息，而不是直接与业务数据相关。
+
+gRPC 框架中的 google.golang.org/grpc/metadata 包，提供了 FromIncomingContext(ctx) 方法用来从 context 中获取元数据。提供了 grpc.SetHeader 方法用于将元数据设置到 Header 中。
+
+在代码中，通过 contextx.WithRequestID(ctx, requestID) 调用，将请求 ID 添加到自定义的上下文中，便于后续业务代码或日志记录使用。上述代码，还会判断 gRPC 请求是否成功，如果失败会将请求 ID 添加到错误信息中。gRPC 请求的返回元数据中，已经包含了请求 ID，这里再次将请求 ID 添加到 gRPC 的返回错误中，原因如下：
+
+1. 错误中包含请求 ID 更易定位问题：在 Go 项目开发中，逻辑代码基本都会对错误进行处理，例如打印错误。所以将请求 ID 包含在错误信息中，在客户端请求报错后，能够通过错误信息，直接获取到请求 ID，从而根据请求 ID 快速定位问题；
+2. gRPC 元数据很少被处理：在 Go 项目开发中，有不少开发者不会处理 gRPC 元数据，所以将请求 ID 保存在元数据中，可能并不会被处理。
+
+#### gRPC 服务加载拦截器
+
+在开发了 RequestIDInterceptor 拦截器之后，还需要将该拦截器添加到 gRPC 请求链中。修改 internal/apiserver/grpcserver.go 文件。
+代码创建了一个 grpc.ServerOption 类型的数组，数组中包含了一个 gRPC 请求拦截器链，拦截器链中包含了开发的请求 ID 拦截器。
+修改 internal/pkg/server/grpc_server.go 文件中的 NewGRPCServer 方法，添加 serverOptions []grpc.ServerOption 类型的入参，并将传入的 gRPC 服务器配置项列表传给 grpc.NewServer() 方法，从而在启动服务时，加载 gRPC 拦截器链。
+
+#### 请求日志中打印请求 ID
+
+通过 RequestIDInterceptor 拦截器给请求上下文注入了请求 ID，还需要修改日志包，用来在每条日志中输出请求 ID。修改 internal/pkg/log/log.go 文件。
+日志包新增了 W 方法，W 是 WithContext 的简称，之所以用简称是因为将函数名缩短，可以有效减小日志打印代码的宽度，减少日志行代码折行概率，利于阅读。这种简写以节省代码宽度的函数命名方法，在 Go 项目开发中经常会被用到。日志包是基础的 Go 包，开发者在使用日志包时，理解这种简写函数名成本并不高。由于 log 包会被多个请求并发调用，为防止请求 ID 被污染，每个请求都会对 log 包深拷贝一个 *zapLogger 对象，然后再添加请求 ID。
+在 RequestIDInterceptor 拦截器中，请求 ID 被注入到自定义上下文中，所以在 W 方法中，就可以使用 contextx.RequestID(ctx) 便捷的从自定义上下文中获取请求 ID。W 方法中，还尝试读取 UserID，并将 UserID 加到日志输出字段中。UserID 是 miniblog 的租户 ID，是关键信息，所以这里也提前实现了 UserID 的日志输出。
+在 log 包中，日志字段的键从 known 包中获取。Go 项目开发中，经常会将一些共享常量统一保存在常量包，例如 known、constant 这类包中，以便集中管理和引用。通过从常量包引用共享常量，可以确保代码中相同变量值的一致性，如果后面常量值需要变更，只需变更一个地方即可更新所有引用了该常量的代码，从而降低代码的维护成本。
+
+gRPC 底层使用了 HTTP/2 作为传输协议，而 HTTP/2 规范规定 Header 的键名必须为小写。因此，在 gRPC 中，所有 Header 键都会被强制转换为小写以符合 HTTP/2 的要求。而在 HTTP/1.x 中，许多实现会保留用户设置的键名大小写格式，但某些 HTTP 框架或工具库（如某些 Web 服务器或代理）可能会自动将 Header 键转换为小写，以简化处理逻辑。考虑到兼容性，在所有场景下统一将 Header 键设置为小写。此外，以 x-开头的 Header 键表明其为自定义 Header。
+
+
+#### 测试 RequestIDInterceptor 拦截器
+为了测试 RequestIDInterceptor 拦截器的执行效果，需要在 internal/apiserver/handler/grpc/healthz.go 文件中的 Healthz 处理器方法中添加以下日志打印：
+
+```go
+log.W(ctx).Infow("Healthz handler is called", "method", "Healthz", "status", "healthy")
+```
+
+通过以下命令来测试请求 ID 是否被正确生成并注入到 context 中：
+```bash
+ make build
+_output/mb-apiserver # 需修改 $HOME/.miniblog/mb-apiserver.yaml文件中server-mode为grpc
+```
+
+打开一个新的 Linux 终端，执行以下命令：
+
+```bash
+go run examples/client/interceptor/main.go
+```
+
+```bash
+2025/06/08 01:31:16 [UnaryClientInterceptor] Invoking method: /v1.MiniBlog/Healthz
+Response Header (key: interceptor-header, value: [interceptor-value])
+Response Header (key: x-request-id, value: [7ebd22ab-ce80-40ff-9f8a-4fdabbea60df])
+Response Header (key: content-type, value: [application/grpc])
+{"timestamp":"2025-06-08 01:31:17"}
+```
+
+可以看到，在 gRPC 返回的 Header 中，成功返回了 x-request-id。在服务端会输出以下日志：
+
+```bash
+{"level":"info","timestamp":"2025-06-08 01:31:17.074","caller":"v1/apiserver_grpc.pb.go:111","message":"Healthz handler is called","x-request-id":"7ebd22ab-ce80-40ff-9f8a-4fdabbea60df","method":"Healthz","status":"healthy"}
+```
+可以看到，log 包从自定义上下文中获取到了 x-request-id，并在日志中输出。
+
+### UnaryClientInterceptor 示例
+examples/client/interceptor/main.go 文件中，实现了一个 UnaryClientInterceptor 拦截器。
+在代码中，实现了一个 gRPC 一元（Unary）客户端拦截器 unaryClientInterceptor。在 unaryClientInterceptor 拦截器中，可以获取以下信息：
+
+1. ctx：上下文对象，包含请求的元数据和链路信息，可将新元数据传入 gRPC 方法调用时使用；
+2. method：调用的 gRPC 方法的名称，例如 /package.Service/Method；
+3. req, reply：请求参数和响应结果（它们是具体的结构体，通常由 .proto 定义的服务方法生成）；
+4. cc：客户端连接对象（*grpc.ClientConn），表示连接的 gRPC 服务端；
+5. invoker：gRPC 的实际调用方法，客户端拦截器需要调用它来完成请求的转发，例如向 gRPC 服务端发送请求并获取响应；
+6. opts：可选的 gRPC 调用选项（grpc.CallOption），如超时时间、拦截机制等，通过它可以传递额外配置。
+这里需要注意，unaryClientInterceptor 拦截器中重新创建的 Outgoing Metadata，会覆盖 main 函数中的 Outgoing Metadata。
+
+### Gin 中间件
+
+Gin 框架也支持 Web 中间件，在 Gin 框架中，Web 中间件就叫中间件。
+Gin 支持三种中间件使用方式：
+1. 全局中间件：全局中间件会作用于所有的路由。它们通常用于处理通用功能，比如请求日志记录、跨域设置、错误恢复；
+2. 路由组中间件：路由组中间件仅对指定的路由组生效，适用于将某些逻辑限定在同一组相关的路由中。例如，所有/api 路径下的路由可能都需要一套特定的身份验证中间件；
+3. 单个路由中间件：单个路由中间件仅对一个路由起作用。有时某个路由需要执行独立的中间件逻辑，这种情况下，可以将中间件绑定到单个路由上。
+
+不同路由组的中间件设置方式不同。
+```go
+package main
+
+import (
+    "log"
+    "net/http"
+    "github.com/gin-gonic/gin"
+)
+
+func LogMiddleware() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        log.Printf("Request path: %s\n", c.Request.URL.Path)
+        c.Next()
+    }
+}
+
+func main() {
+    r := gin.Default()
+    r.Use(LogMiddleware())
+    r.GET("/", func(c *gin.Context) {
+        c.JSON(http.StatusOK, gin.H{"message": "Home"})
+    })
+    apiGroup := r.Group("/api", LogMiddleware()){
+        apiGroup.GET("/hello", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"message": "Hello, API"})
+        })
+        
+        apiGroup.GET("/world", func(c *gin.Context) {
+            c.JSON(http.StatusOK, gin.H{"message": "World, API"})
+        })
+    }
+    
+    r.GET("/secure", LogMiddleware(), func(c *gin.Context) {
+        c.JSON(http.StatusOK, gin.H{"message": "This is a secure route"})
+    })
+    r.Run(":8080")
+}
+```
+
+在代码中，通过 r.Use()、r.Group()、r.Get() 方法分别设置了多个 Gin 中间件。在设置 Gin 中间件时，可以根据需要同时设置一个或者多个，例如 r.Use(gin.Logger(), gin.Recovery())，同时设置了两个 Gin 中间件。
+
+在 LogMiddleware 中间件中，c.Next() 方法之前的代码将在请求到达处理器函数之前执行，而 c.Next() 方法之后的代码将在请求经过处理器函数处理之后执行。另外，在开发 Gin 中间件时，c.Abort() 方法也经常被开发者使用，该方法会直接终止请求的执行。
+
+#### 跨域功能实现
+在前后端分离架构中，由于前后端域名不一致，会触发浏览器的同源策略限制，从而导致请求失败。因此，后端通常需要处理来自前端的跨域请求。
+#### 为什么会出现跨域
+出现跨域问题的原因如下：
+
+1. 出于浏览器的同源策略限制：同源策略（Same-origin policy）是一种约定，是浏览器最核心且最基本的安全功能。如果没有同源策略，浏览器的正常功能可能会受到影响。同源策略是 Web 安全的基础，浏览器实现了这一机制。同源策略会阻止一个域的 JavaScript 脚本与另一个域的内容进行交互；
+2. 同源的定义：所谓同源是指两个页面具有相同的协议（protocol）、主机（host）和端口号（port）；
+3. 非同源限制：
+4. 无法读取非同源网页的 Cookie、LocalStorage 和 IndexedDB；
+5. 无法访问非同源网页的 DOM；
+6. 无法向非同源地址发送 AJAX 请求。
+
+简单来说，当一个资源访问另一个不同源的资源时，就会发出跨域请求。如果目标资源未允许跨域访问，则请求的资源将会遇到跨域问题。
+#### 使用跨域资源共享（CORS）来跨域
+解决跨域问题的方法有多种，例如 CORS、Nginx 反向代理、JSONP 跨域等。在 Go 后端服务开发中，通常使用 CORS 来解决跨域问题。
+
+CORS 是一个 W3C 标准，全称为“跨域资源共享”（Cross-Origin Resource Sharing）。它允许浏览器向跨域服务器发出 AJAX 请求，从而克服了 AJAX 只能在同源环境中使用的限制。例如，当请求 URL 的协议、域名或端口三者中任意一个与当前页面的 URL 不同，即可认为是跨域情况。
+![](docs/images/10.png)
+在使用 CORS 时，HTTP 请求被划分为两类：简单请求和复杂请求。这两种请求的区别主要在于是否会触发 CORS 的预检请求。具体定义如下：
+
+1. 简单请求：请求方法为 GET、HEAD 或 POST，且 HTTP 请求头中仅包含以下六种字段之一：Accept、Accept-Language、Content-Language、Last-Event-ID、Content-Type。其中，Content-Type 的值只能是以下三种之一：application/x-www-form-urlencoded、multipart/form-data 或 text/plain。简单请求在发送时会自动在 HTTP 请求头中添加 Origin 字段，用于标明当前来源（协议、域名和端口），然后由服务端决定是否放行请求；
+2. 复杂请求：凡是不符合简单请求定义的请求，均为复杂请求。
+
+CORS 需要浏览器和服务器的共同支持。目前，所有主流浏览器已支持该功能。当浏览器检测到 AJAX 请求跨源时，会自动附加一些头信息。如果是复杂请求，还会添加一次预检请求。不过这些过程对用户而言是透明的。由此可见，实现 CORS 通信的关键在于服务端。只需服务器实现 CORS 接口（在 HTTP 响应头中设置：Access-Control-Allow-Origin），即可完成跨源通信。
+
+#### 简单请求的 CORS 跨域处理
+对于简单请求，浏览器会直接发出 CORS 请求。具体而言，会在请求头信息中增加一个 Origin 字段：
+
+服务器需要处理该头部，并在返回头中填充 Access-Control-Allow-Origin 字段：
+
+access-control-allow-origin: https://wetv.vip
+
+该头部也可以填写为“*”，表示接受任意域名的请求。如果未返回该头部，浏览器将抛出跨域错误。
+
+#### 复杂请求的 CORS 跨域处理
+复杂请求的 CORS 请求会在正式通信之前增加一次 HTTP 查询请求，称为“预检”请求（preflight）。“预检”请求使用的 HTTP 方法是 OPTIONS，表示该请求用于询问目标资源是否允许跨域访问。
+当后端收到预检请求后，可以通过设置跨域相关的 HTTP 头部以完成跨域请求。支持的头部字段具体如表所示。
+![](docs/images/11.png)
+
+### miniblog 跨域功能实现
+
+由于 miniblog 的请求均为复杂请求，因此这里只需处理复杂请求的跨域问题。跨域相关的 HTTP 头设置，通过中间件实现，miniblog 的实现见 Cors 中间件。
+如果 HTTP 请求不是 OPTIONS 类型的跨域请求，则正常处理该 HTTP 请求。如果 HTTP 请求是 OPTIONS 类型的跨域请求，则通过设置跨域相关的 HTTP 头部信息来允许跨域访问，并直接返回响应而不再进入后续处理流程。
+### miniblog Gin 中间件添加
+在 internal/pkg/middleware/gin/ 目录下新建 requestid.go 和 header.go 文件。requestid.go 文件中实现了 Gin 请求 ID 中间件。header.go 文件中实现了跨域中间件。
+
+在代码中，首先尝试从请求头中获取请求 ID，如果找到则使用该 ID。如果未找到，则生成一个新的 UUID 作为请求 ID。随后，将请求 ID 添加到自定义上下文和 HTTP 响应头中。
+
+修改 internal/apiserver/httpserver.go 源码文件，在其中添加 Gin 中间件。
+
+#### 测试 Gin 中间件
+
+运行以下命令编译并启动 mb-apiserver：
+
+```
+ make
+
+ _output/mb-apiserver # 需修改 $HOME/.miniblog/mb-apiserver.yaml文件中server-mode为gin
+```
+
+打开一个新的 Linux 终端，请求健康检查接口：
+```
+ curl -v http://127.0.0.1:5555/healthz
+```
+可以看到 HTTP 返回头中，成功返回了 X-Request-Id 和 Access-Control-Allow-Origin 返回头。
