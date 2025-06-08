@@ -2137,3 +2137,4 @@ access-control-allow-origin: https://wetv.vip
  curl -v http://127.0.0.1:5555/healthz
 ```
 可以看到 HTTP 返回头中，成功返回了 X-Request-Id 和 Access-Control-Allow-Origin 返回头。
+
